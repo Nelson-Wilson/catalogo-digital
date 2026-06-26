@@ -1,8 +1,34 @@
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage, isFirebaseConfigured } from './config';
+/**
+ * Image Upload Service — Cloudinary (free tier)
+ * 
+ * Firebase Storage requires a paid plan (Blaze).
+ * Cloudinary offers 25GB free storage + 25GB bandwidth/month.
+ * 
+ * SETUP (free, no credit card needed):
+ *   1. Go to https://cloudinary.com and create a free account
+ *   2. Dashboard → Settings → Upload → Add upload preset
+ *      - Preset name: malambe_uploads
+ *      - Signing Mode: Unsigned  ← important!
+ *      - Folder: malambe-products
+ *      - Save
+ *   3. Add to .env.local:
+ *      VITE_CLOUDINARY_CLOUD_NAME=your_cloud_name
+ *      VITE_CLOUDINARY_UPLOAD_PRESET=malambe_uploads
+ */
 
-// Compresses an image file client-side to save bandwidth and storage space.
-export function compressImage(file: File, maxDimension: number = 1000, quality: number = 0.75): Promise<Blob> {
+const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+const UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || 'malambe_uploads';
+const IS_PROD = import.meta.env.PROD;
+const isCloudinaryConfigured = !!CLOUD_NAME;
+
+/**
+ * Compresses an image client-side before uploading.
+ */
+export function compressImage(
+  file: File,
+  maxDimension = 1200,
+  quality = 0.80
+): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -11,44 +37,29 @@ export function compressImage(file: File, maxDimension: number = 1000, quality: 
       img.src = event.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-
+        let { width, height } = img;
         if (width > height) {
-          if (width > maxDimension) {
-            height *= maxDimension / width;
-            width = maxDimension;
-          }
+          if (width > maxDimension) { height = Math.round(height * maxDimension / width); width = maxDimension; }
         } else {
-          if (height > maxDimension) {
-            width *= maxDimension / height;
-            height = maxDimension;
-          }
+          if (height > maxDimension) { width = Math.round(width * maxDimension / height); height = maxDimension; }
         }
-
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(file);
-          return;
-        }
-
+        if (!ctx) { resolve(file); return; }
         ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob((blob) => {
-          if (blob) {
-            resolve(blob);
-          } else {
-            resolve(file);
-          }
-        }, 'image/jpeg', quality);
+        canvas.toBlob(blob => resolve(blob ?? file), 'image/jpeg', quality);
       };
-      img.onerror = (err) => reject(err);
+      img.onerror = reject;
     };
-    reader.onerror = (err) => reject(err);
+    reader.onerror = reject;
   });
 }
 
+/**
+ * Uploads image to Cloudinary (free) with progress reporting.
+ * Falls back to base64 preview in development if Cloudinary not configured.
+ */
 export const uploadProductImage = (
   file: File,
   productId: string,
@@ -56,58 +67,71 @@ export const uploadProductImage = (
 ): Promise<string> => {
   return new Promise(async (resolve, reject) => {
     try {
-      // 1. Compress image first
       const compressedBlob = await compressImage(file);
-      
-      if (isFirebaseConfigured && storage) {
-        // 2. Real Firebase Storage upload
-        const fileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
-        const storageRef = ref(storage, `products/${productId}/${fileName}`);
-        
-        const uploadTask = uploadBytesResumable(storageRef, compressedBlob);
-        
-        uploadTask.on(
-          'state_changed',
-          (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            onProgress(Math.round(progress));
-          },
-          (error) => {
-            console.error('Firebase storage upload failed:', error);
-            reject(error);
-          },
-          async () => {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve(downloadURL);
-          }
-        );
-      } else {
-        // 3. Fallback Base64 compression & slow progress simulation for incredible preview fidelity
-        let simulatedProgress = 0;
-        const interval = setInterval(() => {
-          simulatedProgress += 15;
-          if (simulatedProgress >= 100) {
-            simulatedProgress = 100;
-            clearInterval(interval);
-          }
-          onProgress(simulatedProgress);
-        }, 150);
 
-        const reader = new FileReader();
-        reader.readAsDataURL(compressedBlob);
-        reader.onloadend = () => {
-          setTimeout(() => {
-            resolve(reader.result as string);
-          }, 1100);
+      // ── Cloudinary Upload (free, no credit card) ──────────────
+      if (isCloudinaryConfigured) {
+        const formData = new FormData();
+        formData.append('file', compressedBlob, file.name);
+        formData.append('upload_preset', UPLOAD_PRESET);
+        formData.append('folder', `malambe-products/${productId}`);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`);
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            onProgress(Math.round((e.loaded / e.total) * 100));
+          }
         };
-        reader.onerror = (err) => {
-          clearInterval(interval);
-          reject(err);
+
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            const data = JSON.parse(xhr.responseText);
+            // Use Cloudinary's auto-quality URL transformation
+            const optimizedUrl = data.secure_url.replace(
+              '/upload/',
+              '/upload/q_auto,f_auto,w_1200/'
+            );
+            resolve(optimizedUrl);
+          } else {
+            reject(new Error(`Cloudinary upload failed: ${xhr.statusText}`));
+          }
         };
+
+        xhr.onerror = () => reject(new Error('Upload falhou. Verifique a sua conexão.'));
+        xhr.send(formData);
+        return;
       }
+
+      // ── Dev fallback: base64 preview ──────────────────────────
+      if (IS_PROD) {
+        reject(new Error(
+          'Cloudinary não configurado. Adicione VITE_CLOUDINARY_CLOUD_NAME ao .env.local\n' +
+          'Registo gratuito em: https://cloudinary.com'
+        ));
+        return;
+      }
+
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress = Math.min(progress + 20, 100);
+        onProgress(progress);
+        if (progress >= 100) clearInterval(interval);
+      }, 100);
+
+      const reader = new FileReader();
+      reader.readAsDataURL(compressedBlob);
+      reader.onloadend = () => {
+        setTimeout(() => resolve(reader.result as string), 600);
+      };
+      reader.onerror = (err) => { clearInterval(interval); reject(err); };
+
     } catch (err) {
-      console.error('Image processing failed:', err);
       reject(err);
     }
   });
 };
+
+// Keep this export for compatibility
+export { isCloudinaryConfigured as isStorageConfigured };

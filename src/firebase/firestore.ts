@@ -1,270 +1,304 @@
-import { 
-  collection, 
-  getDocs, 
-  doc, 
-  setDoc, 
-  addDoc, 
-  deleteDoc, 
-  updateDoc, 
+import {
+  collection,
+  getDocs,
+  doc,
+  setDoc,
+  deleteDoc,
   getDoc,
-  query,
-  orderBy,
-  limit
 } from 'firebase/firestore';
 import { firestore, isFirebaseConfigured } from './config';
 import { Product, Testimonial, Promotion, Banner } from '../types';
-import { db as localDB } from '../services/db';
 
-// Firestore collection references
+const IS_PROD = import.meta.env.PROD;
+
 const COLLECTIONS = {
   PRODUCTS: 'products',
   PROMOTIONS: 'promotions',
   TESTIMONIALS: 'testimonials',
   BANNERS: 'banners',
   CATEGORIES: 'categories',
-  SETTINGS: 'settings'
+  SETTINGS: 'settings',
 };
 
-// Seed Firestore with default data if it is empty
-async function seedFirestoreIfNeeded() {
-  if (!isFirebaseConfigured || !firestore) return;
-  
-  try {
-    const productsSnap = await getDocs(collection(firestore, COLLECTIONS.PRODUCTS));
-    if (productsSnap.empty) {
-      console.log('Seeding Firestore with default products...');
-      const localProducts = localDB.getProducts();
-      for (const prod of localProducts) {
-        await setDoc(doc(firestore, COLLECTIONS.PRODUCTS, prod.id), prod);
-      }
-    }
+// ─── Dev-only in-memory store ──────────────────────────────────────────────
+const memStore: Record<string, Map<string, any>> = {
+  products: new Map(),
+  promotions: new Map(),
+  testimonials: new Map(),
+  banners: new Map(),
+};
 
-    const promosSnap = await getDocs(collection(firestore, COLLECTIONS.PROMOTIONS));
-    if (promosSnap.empty) {
-      console.log('Seeding Firestore with default promotions...');
-      const localPromos = localDB.getPromotions();
-      for (const promo of localPromos) {
-        await setDoc(doc(firestore, COLLECTIONS.PROMOTIONS, promo.id), promo);
-      }
-    }
-
-    const testSnap = await getDocs(collection(firestore, COLLECTIONS.TESTIMONIALS));
-    if (testSnap.empty) {
-      console.log('Seeding Firestore with default testimonials...');
-      const localTests = localDB.getTestimonials();
-      for (const test of localTests) {
-        await setDoc(doc(firestore, COLLECTIONS.TESTIMONIALS, test.id), test);
-      }
-    }
-
-    const bannersSnap = await getDocs(collection(firestore, COLLECTIONS.BANNERS));
-    if (bannersSnap.empty) {
-      console.log('Seeding Firestore with default banners...');
-      const localBanners = localDB.getBanners();
-      for (const banner of localBanners) {
-        await setDoc(doc(firestore, COLLECTIONS.BANNERS, banner.id), banner);
-      }
-    }
-  } catch (error) {
-    console.error('Error seeding Firestore default data:', error);
-  }
+function memGet<T>(col: string): T[] {
+  return Array.from(memStore[col]?.values() ?? []) as T[];
+}
+function memSet(col: string, id: string, data: any) {
+  if (!memStore[col]) memStore[col] = new Map();
+  memStore[col].set(id, { ...data, id });
+}
+function memDel(col: string, id: string) {
+  memStore[col]?.delete(id);
 }
 
-// Automatically trigger background seed if Firestore is active
-if (isFirebaseConfigured) {
-  seedFirestoreIfNeeded();
+// ─── Default seed data (dev mode) ─────────────────────────────────────────
+function seedDefaultData() {
+  if (memStore.products.size > 0) return;
+
+  const defaultProducts: Product[] = [
+    {
+      id: 'prod_1',
+      name: 'Conjunto Alfaiataria Premium',
+      category: 'vestuario',
+      subcategory: 'Conjuntos',
+      price: 2500,
+      originalPrice: 2900,
+      description: 'Conjunto de alfaiataria premium em tecido estruturado de alta qualidade. Ideal para eventos sofisticados ou look profissional elegante.',
+      status: 'disponivel',
+      images: ['https://images.unsplash.com/photo-1485968579580-b6d095142e6e?w=800&auto=format&fit=crop&q=80'],
+      featured: true,
+      bestseller: true,
+      news: false,
+      createdAt: new Date('2026-06-01').toISOString(),
+    },
+    {
+      id: 'prod_2',
+      name: 'Vestido de Linho Elegance',
+      category: 'vestuario',
+      subcategory: 'Vestidos',
+      price: 1800,
+      description: 'Vestido longo de linho puro com modelagem fluida e decote sutil.',
+      status: 'disponivel',
+      images: ['https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800&auto=format&fit=crop&q=80'],
+      featured: true,
+      news: true,
+      createdAt: new Date('2026-06-15').toISOString(),
+    },
+    {
+      id: 'prod_3',
+      name: 'Moletom Oversized Carbono',
+      category: 'vestuario',
+      subcategory: 'Moletons',
+      price: 2200,
+      originalPrice: 2400,
+      description: 'Moletom oversized com interior flanelado. Bolso canguru e acabamento premium.',
+      status: 'disponivel',
+      images: ['https://images.unsplash.com/photo-1543163521-1bf539c55dd2?w=800&auto=format&fit=crop&q=80'],
+      bestseller: true,
+      createdAt: new Date('2026-06-10').toISOString(),
+    },
+    {
+      id: 'prod_7',
+      name: 'Tênis Air Runner Sport',
+      category: 'calcados',
+      subcategory: 'Tênis',
+      price: 4500,
+      originalPrice: 5200,
+      description: 'Tênis de alta performance com amortecimento responsivo.',
+      status: 'disponivel',
+      images: ['https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&auto=format&fit=crop&q=80'],
+      featured: true,
+      createdAt: new Date('2026-06-18').toISOString(),
+    },
+    {
+      id: 'sorvete_250',
+      name: 'Sorvete de Malambe 250ml',
+      category: 'sorvete',
+      subcategory: 'Sorvete 250ml',
+      price: 150,
+      description: 'Sorvete artesanal cremoso com o autêntico sabor do fruto de embondeiro (malambe). 250ml.',
+      status: 'disponivel',
+      images: ['https://images.unsplash.com/photo-1497034825429-c343d7c6a68f?w=800&auto=format&fit=crop&q=80'],
+      featured: true,
+      bestseller: true,
+      nutritionalInfo: { calories: '180kcal', vitaminC: '28mg', calcium: '120mg', fiber: '2g' },
+      createdAt: new Date('2026-06-01').toISOString(),
+    },
+    {
+      id: 'sorvete_500',
+      name: 'Sorvete de Malambe 500ml',
+      category: 'sorvete',
+      subcategory: 'Sorvete 500ml',
+      price: 280,
+      description: 'Sorvete artesanal cremoso com o autêntico sabor tropical do malambe. 500ml para partilhar.',
+      status: 'disponivel',
+      images: ['https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=800&auto=format&fit=crop&q=80'],
+      featured: true,
+      nutritionalInfo: { calories: '360kcal', vitaminC: '56mg', calcium: '240mg', fiber: '4g' },
+      createdAt: new Date('2026-06-01').toISOString(),
+    },
+    {
+      id: 'sorvete_700',
+      name: 'Sorvete de Malambe 700ml',
+      category: 'sorvete',
+      subcategory: 'Sorvete 700ml',
+      price: 380,
+      description: 'Sorvete artesanal premium de malambe em embalagem familiar 700ml. Sabor exótico do embondeiro.',
+      status: 'disponivel',
+      images: ['https://images.unsplash.com/photo-1476124369491-e7addf5db371?w=800&auto=format&fit=crop&q=80'],
+      featured: true,
+      nutritionalInfo: { calories: '504kcal', vitaminC: '78mg', calcium: '336mg', fiber: '5.6g' },
+      createdAt: new Date('2026-06-01').toISOString(),
+    },
+  ];
+
+  defaultProducts.forEach(p => memSet('products', p.id, p));
+
+  const defaultTestimonials: Testimonial[] = [
+    { id: 'test_1', name: 'Ana Machava', role: 'Cliente Fiel', comment: 'O sorvete de malambe é incrível! Nunca tinha provado algo tão original e delicioso.', rating: 5 },
+    { id: 'test_2', name: 'Carlos Sitoe', role: 'Empresário', comment: 'As roupas têm uma qualidade excelente. Atendimento via WhatsApp muito rápido!', rating: 5 },
+  ];
+  defaultTestimonials.forEach(t => memSet('testimonials', t.id, t));
 }
 
+if (!IS_PROD && !isFirebaseConfigured) {
+  seedDefaultData();
+}
+
+// ─── Firestore service ─────────────────────────────────────────────────────
 export const firestoreService = {
-  // --- Products ---
   async getProducts(): Promise<Product[]> {
     if (isFirebaseConfigured && firestore) {
       try {
-        const querySnapshot = await getDocs(collection(firestore, COLLECTIONS.PRODUCTS));
+        const snap = await getDocs(collection(firestore, COLLECTIONS.PRODUCTS));
         const items: Product[] = [];
-        querySnapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, ...docSnap.data() } as Product);
-        });
-        // Sort by createdAt descending
+        snap.forEach(d => items.push({ id: d.id, ...d.data() } as Product));
         return items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      } catch (error) {
-        console.error('Failed to get products from Firestore:', error);
-        return localDB.getProducts();
+      } catch (err) {
+        console.error('Firestore getProducts failed:', err);
+        if (IS_PROD) throw err;
       }
     }
-    return localDB.getProducts();
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    return memGet<Product>('products').sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
 
   async saveProduct(product: Product): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        const docRef = doc(firestore, COLLECTIONS.PRODUCTS, product.id);
-        await setDoc(docRef, product);
-        return;
-      } catch (error) {
-        console.error('Failed to save product to Firestore:', error);
-        throw error;
-      }
+      await setDoc(doc(firestore, COLLECTIONS.PRODUCTS, product.id), product);
+      return;
     }
-    localDB.saveProduct(product);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memSet('products', product.id, product);
   },
 
   async deleteProduct(id: string): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await deleteDoc(doc(firestore, COLLECTIONS.PRODUCTS, id));
-        return;
-      } catch (error) {
-        console.error('Failed to delete product from Firestore:', error);
-        throw error;
-      }
+      await deleteDoc(doc(firestore, COLLECTIONS.PRODUCTS, id));
+      return;
     }
-    localDB.deleteProduct(id);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memDel('products', id);
   },
 
-  // --- Promotions ---
   async getPromotions(): Promise<Promotion[]> {
     if (isFirebaseConfigured && firestore) {
       try {
-        const querySnapshot = await getDocs(collection(firestore, COLLECTIONS.PROMOTIONS));
+        const snap = await getDocs(collection(firestore, COLLECTIONS.PROMOTIONS));
         const items: Promotion[] = [];
-        querySnapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, ...docSnap.data() } as Promotion);
-        });
+        snap.forEach(d => items.push({ id: d.id, ...d.data() } as Promotion));
         return items;
-      } catch (error) {
-        console.error('Failed to get promotions from Firestore:', error);
-        return localDB.getPromotions();
+      } catch (err) {
+        console.error('Firestore getPromotions failed:', err);
+        if (IS_PROD) throw err;
       }
     }
-    return localDB.getPromotions();
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    return memGet<Promotion>('promotions');
   },
 
   async savePromotion(promo: Promotion): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await setDoc(doc(firestore, COLLECTIONS.PROMOTIONS, promo.id), promo);
-        return;
-      } catch (error) {
-        console.error('Failed to save promotion to Firestore:', error);
-        throw error;
-      }
+      await setDoc(doc(firestore, COLLECTIONS.PROMOTIONS, promo.id), promo);
+      return;
     }
-    localDB.savePromotion(promo);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memSet('promotions', promo.id, promo);
   },
 
   async deletePromotion(id: string): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await deleteDoc(doc(firestore, COLLECTIONS.PROMOTIONS, id));
-        return;
-      } catch (error) {
-        console.error('Failed to delete promotion from Firestore:', error);
-        throw error;
-      }
+      await deleteDoc(doc(firestore, COLLECTIONS.PROMOTIONS, id));
+      return;
     }
-    localDB.deletePromotion(id);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memDel('promotions', id);
   },
 
-  // --- Banners ---
   async getBanners(): Promise<Banner[]> {
     if (isFirebaseConfigured && firestore) {
       try {
-        const querySnapshot = await getDocs(collection(firestore, COLLECTIONS.BANNERS));
+        const snap = await getDocs(collection(firestore, COLLECTIONS.BANNERS));
         const items: Banner[] = [];
-        querySnapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, ...docSnap.data() } as Banner);
-        });
+        snap.forEach(d => items.push({ id: d.id, ...d.data() } as Banner));
         return items;
-      } catch (error) {
-        console.error('Failed to get banners from Firestore:', error);
-        return localDB.getBanners();
+      } catch (err) {
+        console.error('Firestore getBanners failed:', err);
+        if (IS_PROD) throw err;
       }
     }
-    return localDB.getBanners();
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    return memGet<Banner>('banners');
   },
 
   async saveBanner(banner: Banner): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await setDoc(doc(firestore, COLLECTIONS.BANNERS, banner.id), banner);
-        return;
-      } catch (error) {
-        console.error('Failed to save banner to Firestore:', error);
-        throw error;
-      }
+      await setDoc(doc(firestore, COLLECTIONS.BANNERS, banner.id), banner);
+      return;
     }
-    localDB.saveBanner(banner);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memSet('banners', banner.id, banner);
   },
 
   async deleteBanner(id: string): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await deleteDoc(doc(firestore, COLLECTIONS.BANNERS, id));
-        return;
-      } catch (error) {
-        console.error('Failed to delete banner from Firestore:', error);
-        throw error;
-      }
+      await deleteDoc(doc(firestore, COLLECTIONS.BANNERS, id));
+      return;
     }
-    localDB.deleteBanner(id);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memDel('banners', id);
   },
 
-  // --- Testimonials ---
   async getTestimonials(): Promise<Testimonial[]> {
     if (isFirebaseConfigured && firestore) {
       try {
-        const querySnapshot = await getDocs(collection(firestore, COLLECTIONS.TESTIMONIALS));
+        const snap = await getDocs(collection(firestore, COLLECTIONS.TESTIMONIALS));
         const items: Testimonial[] = [];
-        querySnapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, ...docSnap.data() } as Testimonial);
-        });
+        snap.forEach(d => items.push({ id: d.id, ...d.data() } as Testimonial));
         return items;
-      } catch (error) {
-        console.error('Failed to get testimonials from Firestore:', error);
-        return localDB.getTestimonials();
+      } catch (err) {
+        console.error('Firestore getTestimonials failed:', err);
+        if (IS_PROD) throw err;
       }
     }
-    return localDB.getTestimonials();
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    return memGet<Testimonial>('testimonials');
   },
 
   async saveTestimonial(test: Testimonial): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await setDoc(doc(firestore, COLLECTIONS.TESTIMONIALS, test.id), test);
-        return;
-      } catch (error) {
-        console.error('Failed to save testimonial to Firestore:', error);
-        throw error;
-      }
+      await setDoc(doc(firestore, COLLECTIONS.TESTIMONIALS, test.id), test);
+      return;
     }
-    localDB.saveTestimonial(test);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memSet('testimonials', test.id, test);
   },
 
   async deleteTestimonial(id: string): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await deleteDoc(doc(firestore, COLLECTIONS.TESTIMONIALS, id));
-        return;
-      } catch (error) {
-        console.error('Failed to delete testimonial from Firestore:', error);
-        throw error;
-      }
+      await deleteDoc(doc(firestore, COLLECTIONS.TESTIMONIALS, id));
+      return;
     }
-    localDB.deleteTestimonial(id);
+    if (IS_PROD) throw new Error('Firebase não configurado.');
+    memDel('testimonials', id);
   },
 
-  // --- Categories ---
   async getCategories(): Promise<string[]> {
     if (isFirebaseConfigured && firestore) {
       try {
         const docRef = doc(firestore, COLLECTIONS.CATEGORIES, 'main');
         const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          return docSnap.data().list || ['vestuario', 'calcados', 'sorvete'];
-        }
-      } catch (error) {
-        console.error('Failed to fetch categories:', error);
+        if (docSnap.exists()) return docSnap.data().list || ['vestuario', 'calcados', 'sorvete'];
+      } catch (err) {
+        console.error('Failed to fetch categories:', err);
       }
     }
     return ['vestuario', 'calcados', 'sorvete'];
@@ -272,43 +306,30 @@ export const firestoreService = {
 
   async saveCategories(list: string[]): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await setDoc(doc(firestore, COLLECTIONS.CATEGORIES, 'main'), { list });
-        return;
-      } catch (error) {
-        console.error('Failed to save categories:', error);
-      }
+      await setDoc(doc(firestore, COLLECTIONS.CATEGORIES, 'main'), { list });
     }
   },
 
-  // --- General Settings ---
   async getSettings(): Promise<any> {
-    const defaultSettings = {
+    const defaults = {
       whatsappNumber: '+258866473065',
-      catalogTitle: 'Cantinho da Bianca',
-      maintenanceMode: false
+      catalogTitle: 'Malambe & Moda',
+      maintenanceMode: false,
     };
     if (isFirebaseConfigured && firestore) {
       try {
-        const docRef = doc(firestore, COLLECTIONS.SETTINGS, 'general');
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          return { ...defaultSettings, ...docSnap.data() };
-        }
-      } catch (error) {
-        console.error('Failed to fetch settings:', error);
+        const docSnap = await getDoc(doc(firestore, COLLECTIONS.SETTINGS, 'general'));
+        if (docSnap.exists()) return { ...defaults, ...docSnap.data() };
+      } catch (err) {
+        console.error('Failed to fetch settings:', err);
       }
     }
-    return defaultSettings;
+    return defaults;
   },
 
   async saveSettings(settings: any): Promise<void> {
     if (isFirebaseConfigured && firestore) {
-      try {
-        await setDoc(doc(firestore, COLLECTIONS.SETTINGS, 'general'), settings);
-      } catch (error) {
-        console.error('Failed to save settings:', error);
-      }
+      await setDoc(doc(firestore, COLLECTIONS.SETTINGS, 'general'), settings);
     }
-  }
+  },
 };

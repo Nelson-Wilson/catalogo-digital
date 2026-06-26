@@ -1,76 +1,69 @@
-const CACHE_NAME = 'malambe-premium-v1';
-const ASSETS_TO_CACHE = [
+/* ═══════════════════════════════════════════════════════════
+   Malambe & Moda — Service Worker
+   Strategy: Network-first with cache fallback
+   Cache: Static assets are cached indefinitely
+   ═══════════════════════════════════════════════════════════ */
+
+const CACHE_NAME = 'malambe-moda-v2';
+const OFFLINE_URL = '/';
+
+// Static assets to pre-cache
+const PRECACHE_ASSETS = [
   '/',
-  '/index.html',
   '/manifest.json',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap',
-  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css'
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/favicon.ico',
 ];
 
-// Install service worker and cache critical shell files
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    }).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS))
   );
+  self.skipWaiting();
 });
 
-// Activate event - clean old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            console.log('Clearing old cache:', cache);
-            return caches.delete(cache);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    caches.keys().then((cacheNames) =>
+      Promise.all(
+        cacheNames
+          .filter((name) => name !== CACHE_NAME)
+          .map((name) => caches.delete(name))
+      )
+    )
   );
+  self.clients.claim();
 });
 
-// Fetch event - cache-first with network fallback for static, network-first for others
 self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  const url = new URL(request.url);
+  // Skip non-GET and Firebase/API requests
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (
+    url.hostname.includes('firebaseapp.com') ||
+    url.hostname.includes('googleapis.com') ||
+    url.hostname.includes('firebase.com') ||
+    url.hostname.includes('anthropic.com')
+  ) return;
 
-  // Skip non-GET requests or firebase auth/firestore requests
-  if (request.method !== 'GET' || url.href.includes('firestore.googleapis.com') || url.href.includes('identitytoolkit.googleapis.com')) {
+  // For navigation requests: network-first
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(OFFLINE_URL))
+    );
     return;
   }
 
+  // For assets: stale-while-revalidate
   event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Return cached and update cache in background
-        fetch(request).then((networkResponse) => {
-          if (networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, networkResponse));
-          }
-        }).catch(() => {});
-        return cachedResponse;
-      }
-
-      return fetch(request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-          return networkResponse;
-        }
-
-        const responseToCache = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(request, responseToCache);
-        });
-
-        return networkResponse;
-      }).catch(() => {
-        // Offline fallback
-        if (request.mode === 'navigate') {
-          return caches.match('/index.html');
-        }
-      });
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(event.request);
+      const networkPromise = fetch(event.request).then((response) => {
+        if (response.ok) cache.put(event.request, response.clone());
+        return response;
+      }).catch(() => cached);
+      return cached ?? networkPromise;
     })
   );
 });

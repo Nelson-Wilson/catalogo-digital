@@ -1,5 +1,8 @@
 User-agent: *
 Allow: /
-Disallow: /admin
 
-Sitemap: https://malambepremium.com/sitemap.xml
+Sitemap: https://www.malambeemoda.com/sitemap.xml
+
+# Disallow admin panel indexing
+Disallow: /admin
+Disallow: /?admin=*
